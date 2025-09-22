@@ -9,7 +9,11 @@
       "Bash(javac:*)",
       "Bash(mvn test:*)",
       "Bash(chmod:*)",
-      "Bash(./test-configurations.sh:*)"
+      "Bash(./test-configurations.sh:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": []
