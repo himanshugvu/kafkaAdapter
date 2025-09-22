@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/himan/Project/claudeAgent/kafkaEventAdapter/orchestrator-core-adapter/**)",
+      "Read(//c/Users/himan/Project/claudeAgent/kafkaEventAdapter/**)",
+      "Bash(mvn clean:*)",
+      "Bash(java:*)",
+      "Bash(curl:*)",
+      "Bash(javac:*)",
+      "Bash(mvn test:*)",
+      "Bash(chmod:*)",
+      "Bash(./test-configurations.sh:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,130 @@
+{
+  "groups": [
+    {
+      "name": "adapter",
+      "type": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties"
+    },
+    {
+      "name": "adapter.consumer",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceMethod": "consumer()"
+    },
+    {
+      "name": "adapter.db",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$DbConfig",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceMethod": "db()"
+    },
+    {
+      "name": "adapter.dlt",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$DltConfig",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceMethod": "dlt()"
+    },
+    {
+      "name": "adapter.error",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$ErrorConfig",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceMethod": "error()"
+    },
+    {
+      "name": "adapter.retry",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$RetryConfig",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties",
+      "sourceMethod": "retry()"
+    }
+  ],
+  "properties": [
+    {
+      "name": "adapter.consumer.bootstrap-servers",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig"
+    },
+    {
+      "name": "adapter.consumer.concurrency",
+      "type": "java.lang.Integer",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "adapter.consumer.group-id",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig"
+    },
+    {
+      "name": "adapter.consumer.max-poll-records",
+      "type": "java.lang.Integer",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "adapter.consumer.mode",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$ConsumerMode",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig"
+    },
+    {
+      "name": "adapter.consumer.poll-timeout-ms",
+      "type": "java.lang.Long",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "adapter.consumer.topic",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ConsumerConfig"
+    },
+    {
+      "name": "adapter.db.bulk-size",
+      "type": "java.lang.Integer",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DbConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "adapter.db.circuit-breaker",
+      "type": "java.lang.Boolean",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DbConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "adapter.db.enabled",
+      "type": "java.lang.Boolean",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DbConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "adapter.db.timeout-ms",
+      "type": "java.lang.Long",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DbConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "adapter.dlt.bootstrap-servers",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DltConfig"
+    },
+    {
+      "name": "adapter.dlt.non-retryable-topic",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DltConfig"
+    },
+    {
+      "name": "adapter.dlt.retryable-topic",
+      "type": "java.lang.String",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$DltConfig"
+    },
+    {
+      "name": "adapter.error.strategy",
+      "type": "com.orchestrator.adapter.config.AdapterProperties$ErrorStrategy",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$ErrorConfig"
+    },
+    {
+      "name": "adapter.retry.max-attempts",
+      "type": "java.lang.Integer",
+      "sourceType": "com.orchestrator.adapter.config.AdapterProperties$RetryConfig",
+      "defaultValue": 0
+    }
+  ],
+  "hints": []
+}
