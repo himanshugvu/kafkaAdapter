@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.orchestrator.adapter.service.JsonProcessorTest
--------------------------------------------------------------------------------
-Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.175 s -- in com.orchestrator.adapter.service.JsonProcessorTest
