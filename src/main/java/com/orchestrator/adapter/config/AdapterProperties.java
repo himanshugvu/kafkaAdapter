@@ -37,8 +37,9 @@ public record AdapterProperties(
     ) {}
 
     public record DltConfig(
-        @NotBlank String retryableTopic,
-        @NotBlank String nonRetryableTopic,
+        boolean enabled,
+        String retryableTopic,
+        String nonRetryableTopic,
         String bootstrapServers
     ) {}
 

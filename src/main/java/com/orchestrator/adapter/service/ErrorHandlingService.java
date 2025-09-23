@@ -8,11 +8,13 @@ import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 @Service
@@ -22,18 +24,18 @@ public class ErrorHandlingService {
 
     private final AdapterProperties properties;
     private final FailureRecordRepository failureRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final Optional<KafkaTemplate<String, String>> kafkaTemplate;
     private final CircuitBreaker dbCircuitBreaker;
     private final RetryService retryService;
 
     public ErrorHandlingService(AdapterProperties properties,
                                FailureRecordRepository failureRepository,
-                               KafkaTemplate<String, String> kafkaTemplate,
+                               @Autowired(required = false) KafkaTemplate<String, String> kafkaTemplate,
                                CircuitBreakerRegistry circuitBreakerRegistry,
                                RetryService retryService) {
         this.properties = properties;
         this.failureRepository = failureRepository;
-        this.kafkaTemplate = kafkaTemplate;
+        this.kafkaTemplate = Optional.ofNullable(kafkaTemplate);
         this.dbCircuitBreaker = circuitBreakerRegistry.circuitBreaker("dbCircuit");
         this.retryService = retryService;
     }
@@ -101,11 +103,21 @@ public class ErrorHandlingService {
     }
 
     private CompletableFuture<Void> handleKafkaFailure(FailureRecord failure) {
+        if (!isDltEnabled()) {
+            logger.warn("DLT strategy configured but DLT is disabled");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        if (kafkaTemplate.isEmpty()) {
+            logger.warn("DLT enabled but KafkaTemplate not available");
+            return CompletableFuture.completedFuture(null);
+        }
+
         String topic = failure.getFailureType() == FailureRecord.FailureType.RETRYABLE
             ? properties.dlt().retryableTopic()
             : properties.dlt().nonRetryableTopic();
 
-        return kafkaTemplate.send(topic, failure.getMessageKey(), failure.getMessageValue())
+        return kafkaTemplate.get().send(topic, failure.getMessageKey(), failure.getMessageValue())
             .thenAccept(result -> {
                 logger.debug("Sent failure record to DLT topic '{}': offset {}",
                     topic, result.getRecordMetadata().offset());
@@ -119,9 +131,12 @@ public class ErrorHandlingService {
     private CompletableFuture<Void> handleHybridFailure(FailureRecord failure) {
         if (properties.db().enabled() && dbCircuitBreaker.getState() != CircuitBreaker.State.OPEN) {
             return handleDbFailure(failure);
-        } else {
+        } else if (isDltEnabled()) {
             logger.warn("DB unavailable, falling back to Kafka DLT");
             return handleKafkaFailure(failure);
+        } else {
+            logger.warn("Both DB and DLT are disabled, cannot handle failure");
+            return CompletableFuture.completedFuture(null);
         }
     }
 
@@ -151,6 +166,16 @@ public class ErrorHandlingService {
     }
 
     private CompletableFuture<Void> handleKafkaBatchFailures(List<FailureRecord> failures) {
+        if (!isDltEnabled()) {
+            logger.warn("DLT strategy configured but DLT is disabled");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        if (kafkaTemplate.isEmpty()) {
+            logger.warn("DLT enabled but KafkaTemplate not available");
+            return CompletableFuture.completedFuture(null);
+        }
+
         List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (FailureRecord failure : failures) {
@@ -158,7 +183,7 @@ public class ErrorHandlingService {
                 ? properties.dlt().retryableTopic()
                 : properties.dlt().nonRetryableTopic();
 
-            CompletableFuture<Void> future = kafkaTemplate.send(topic, failure.getMessageKey(), failure.getMessageValue())
+            CompletableFuture<Void> future = kafkaTemplate.get().send(topic, failure.getMessageKey(), failure.getMessageValue())
                 .thenAccept(result -> {
                     logger.debug("Sent failure record to DLT topic '{}': offset {}",
                         topic, result.getRecordMetadata().offset());
@@ -177,10 +202,17 @@ public class ErrorHandlingService {
     private CompletableFuture<Void> handleHybridBatchFailures(List<FailureRecord> failures) {
         if (properties.db().enabled() && dbCircuitBreaker.getState() != CircuitBreaker.State.OPEN) {
             return handleDbBatchFailures(failures);
-        } else {
+        } else if (isDltEnabled()) {
             logger.warn("DB unavailable, falling back to Kafka DLT for {} failures", failures.size());
             return handleKafkaBatchFailures(failures);
+        } else {
+            logger.warn("Both DB and DLT are disabled, cannot handle {} failures", failures.size());
+            return CompletableFuture.completedFuture(null);
         }
+    }
+
+    private boolean isDltEnabled() {
+        return properties.dlt() != null && properties.dlt().enabled();
     }
 
     public boolean isDbCircuitBreakerOpen() {

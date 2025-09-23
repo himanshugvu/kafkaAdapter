@@ -12,6 +12,7 @@ adapter:
   error:
     strategy: db                   # db | kafka | hybrid
   dlt:
+    enabled: false                 # Set to true to enable DLT functionality
     retryable-topic: ${DLT_RETRY_TOPIC:my-retry-dlt}
     non-retryable-topic: ${DLT_NONRETRY_TOPIC:my-nonretry-dlt}
     bootstrap-servers: ${KAFKA_BROKERS:localhost:9092}

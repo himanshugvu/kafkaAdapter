@@ -5,6 +5,8 @@ import com.orchestrator.adapter.model.FailureRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
@@ -18,72 +20,38 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
-public class MessageConsumerService {
+@ConditionalOnProperty(name = "adapter.consumer.mode", havingValue = "batch", matchIfMissing = true)
+public class BatchMessageConsumerService {
 
-    private static final Logger logger = LoggerFactory.getLogger(MessageConsumerService.class);
+    private static final Logger logger = LoggerFactory.getLogger(BatchMessageConsumerService.class);
 
     private final AdapterProperties properties;
     private final MessageTransformer messageTransformer;
     private final RetryService retryService;
     private final ErrorHandlingService errorHandlingService;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate<String, String> targetKafkaTemplate;
 
-    public MessageConsumerService(AdapterProperties properties,
-                                 MessageTransformer messageTransformer,
-                                 RetryService retryService,
-                                 ErrorHandlingService errorHandlingService,
-                                 KafkaTemplate<String, String> kafkaTemplate) {
+    public BatchMessageConsumerService(AdapterProperties properties,
+                                      MessageTransformer messageTransformer,
+                                      RetryService retryService,
+                                      ErrorHandlingService errorHandlingService,
+                                      @Qualifier("targetKafkaTemplate") KafkaTemplate<String, String> targetKafkaTemplate) {
         this.properties = properties;
         this.messageTransformer = messageTransformer;
         this.retryService = retryService;
         this.errorHandlingService = errorHandlingService;
-        this.kafkaTemplate = kafkaTemplate;
+        this.targetKafkaTemplate = targetKafkaTemplate;
+
+        logger.info("BatchMessageConsumerService initialized - BATCH mode enabled");
     }
 
-    @KafkaListener(topics = "${adapter.consumer.topic}",
-                   containerFactory = "kafkaListenerContainerFactory")
-    public void consumeMessages(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
-        logger.info("Received batch of {} records", records.size());
-
-        if (properties.consumer().mode() == AdapterProperties.ConsumerMode.RECORD) {
-            processRecordMode(records, acknowledgment);
-        } else {
-            processBatchMode(records, acknowledgment);
-        }
-    }
-
-    private void processRecordMode(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
-        logger.debug("Processing in RECORD mode - {} records", records.size());
-
-        AtomicInteger processed = new AtomicInteger(0);
-        AtomicInteger failed = new AtomicInteger(0);
-
-        for (ConsumerRecord<String, String> record : records) {
-            processRecord(record)
-                .thenAccept(success -> {
-                    if (success) {
-                        processed.incrementAndGet();
-                    } else {
-                        failed.incrementAndGet();
-                    }
-
-                    int totalProcessed = processed.get() + failed.get();
-                    if (totalProcessed == records.size()) {
-                        logger.info("Record mode processing complete: {} succeeded, {} failed", processed.get(), failed.get());
-                        acknowledgment.acknowledge();
-                    }
-                })
-                .exceptionally(throwable -> {
-                    failed.incrementAndGet();
-                    logger.error("Unexpected error processing record: {}", throwable.getMessage());
-
-                    int totalProcessed = processed.get() + failed.get();
-                    if (totalProcessed == records.size()) {
-                        acknowledgment.acknowledge();
-                    }
-                    return null;
-                });
-        }
+    @KafkaListener(
+        topics = "${adapter.consumer.topic}",
+        containerFactory = "batchKafkaListenerContainerFactory"
+    )
+    public void consumeBatchMessages(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
+        logger.info("BATCH MODE: Received batch of {} records", records.size());
+        processBatchMode(records, acknowledgment);
     }
 
     private void processBatchMode(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
@@ -141,25 +109,20 @@ public class MessageConsumerService {
         }
     }
 
-    private CompletableFuture<Boolean> processRecord(ConsumerRecord<String, String> record) {
-        return retryService.executeWithRetry(
-            () -> transformAndSend(record),
-            "processRecord"
-        )
-        .thenApply(result -> true)
-        .exceptionally(throwable -> {
-            errorHandlingService.handleFailure(record, throwable, properties.retry().maxAttempts());
-            return false;
-        });
-    }
-
     private CompletableFuture<Boolean> processRecordInBatch(ConsumerRecord<String, String> record, List<FailureRecord> failures) {
         return retryService.executeWithRetry(
             () -> transformAndSend(record),
             "processRecordInBatch"
         )
-        .thenApply(result -> true)
+        .thenApply(result -> {
+            logger.debug("Batch record processed successfully: topic={}, partition={}, offset={}",
+                        record.topic(), record.partition(), record.offset());
+            return true;
+        })
         .exceptionally(throwable -> {
+            logger.error("Batch record processing failed after retries: topic={}, partition={}, offset={}, error={}",
+                        record.topic(), record.partition(), record.offset(), throwable.getMessage());
+
             RetryService.RetryResult retryResult = retryService.classifyFailure(throwable);
 
             FailureRecord.FailureType failureType = retryResult.isRetriable()
@@ -188,17 +151,19 @@ public class MessageConsumerService {
     private CompletableFuture<Void> transformAndSend(ConsumerRecord<String, String> record) {
         return CompletableFuture.supplyAsync(() -> {
             String transformedMessage = messageTransformer.transform(record.value());
-
-            return kafkaTemplate.send(getTargetTopic(), record.key(), transformedMessage);
+            return targetKafkaTemplate.send(getTargetTopic(), record.key(), transformedMessage);
         })
         .thenCompose(sendResult -> sendResult)
         .thenAccept(result -> {
-            logger.debug("Successfully sent message to topic '{}': offset {}",
-                result.getRecordMetadata().topic(), result.getRecordMetadata().offset());
+            logger.debug("Successfully sent message to topic '{}': partition={}, offset={}",
+                result.getRecordMetadata().topic(),
+                result.getRecordMetadata().partition(),
+                result.getRecordMetadata().offset());
         });
     }
 
     private String getTargetTopic() {
-        return System.getProperty("target.kafka.topic", "output-topic");
+        String targetTopic = System.getProperty("target.kafka.topic");
+        return targetTopic != null ? targetTopic : "output-topic";
     }
 }
