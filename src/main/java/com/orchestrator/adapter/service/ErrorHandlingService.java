@@ -9,6 +9,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.function.Supplier;
 
 @Service
 public class ErrorHandlingService {
@@ -25,19 +29,22 @@ public class ErrorHandlingService {
     private final AdapterProperties properties;
     private final FailureRecordRepository failureRepository;
     private final Optional<KafkaTemplate<String, String>> kafkaTemplate;
-    private final CircuitBreaker dbCircuitBreaker;
+    private final Optional<CircuitBreaker> dbCircuitBreaker;
     private final RetryService retryService;
+    private final Executor asyncExecutor;
 
     public ErrorHandlingService(AdapterProperties properties,
                                FailureRecordRepository failureRepository,
                                @Autowired(required = false) KafkaTemplate<String, String> kafkaTemplate,
                                CircuitBreakerRegistry circuitBreakerRegistry,
-                               RetryService retryService) {
+                               RetryService retryService,
+                               @Qualifier("adapterAsyncExecutor") Executor asyncExecutor) {
         this.properties = properties;
         this.failureRepository = failureRepository;
         this.kafkaTemplate = Optional.ofNullable(kafkaTemplate);
-        this.dbCircuitBreaker = circuitBreakerRegistry.circuitBreaker("dbCircuit");
+        this.dbCircuitBreaker = resolveCircuitBreaker(circuitBreakerRegistry);
         this.retryService = retryService;
+        this.asyncExecutor = asyncExecutor;
     }
 
     public CompletableFuture<Void> handleFailure(ConsumerRecord<String, String> record, Throwable error, int retryCount) {
@@ -78,28 +85,27 @@ public class ErrorHandlingService {
     }
 
     private CompletableFuture<Void> handleDbFailure(FailureRecord failure) {
-        if (!properties.db().enabled()) {
+        if (!isDbEnabled()) {
             logger.warn("DB strategy configured but DB is disabled");
             return CompletableFuture.completedFuture(null);
         }
 
         return CompletableFuture.supplyAsync(() -> {
             try {
-                if (dbCircuitBreaker.getState() == CircuitBreaker.State.OPEN) {
+                if (isDbCircuitBreakerOpen()) {
                     logger.error("DB circuit breaker is OPEN, cannot store failure record");
                     return null;
                 }
 
-                return dbCircuitBreaker.executeSupplier(() -> {
+                return executeWithCircuitBreaker(() -> {
                     failureRepository.save(failure);
                     logger.debug("Stored failure record to DB: {}", failure.getId());
                     return null;
                 });
             } catch (Exception e) {
-                logger.error("Failed to store failure record to DB: {}", e.getMessage());
-                throw new RuntimeException(e);
+                throw new CompletionException(e);
             }
-        });
+        }, asyncExecutor);
     }
 
     private CompletableFuture<Void> handleKafkaFailure(FailureRecord failure) {
@@ -118,18 +124,16 @@ public class ErrorHandlingService {
             : properties.dlt().nonRetryableTopic();
 
         return kafkaTemplate.get().send(topic, failure.getMessageKey(), failure.getMessageValue())
-            .thenAccept(result -> {
-                logger.debug("Sent failure record to DLT topic '{}': offset {}",
-                    topic, result.getRecordMetadata().offset());
-            })
+            .thenAccept(result -> logger.debug("Sent failure record to DLT topic '{}': offset {}",
+                topic, result.getRecordMetadata().offset()))
             .exceptionally(throwable -> {
-                logger.error("Failed to send failure record to DLT topic '{}': {}", topic, throwable.getMessage());
+                logger.error("Failed to send failure record to DLT topic '{}': {}", topic, throwable.getMessage(), throwable);
                 return null;
             });
     }
 
     private CompletableFuture<Void> handleHybridFailure(FailureRecord failure) {
-        if (properties.db().enabled() && dbCircuitBreaker.getState() != CircuitBreaker.State.OPEN) {
+        if (isDbEnabled() && !isDbCircuitBreakerOpen()) {
             return handleDbFailure(failure);
         } else if (isDltEnabled()) {
             logger.warn("DB unavailable, falling back to Kafka DLT");
@@ -141,28 +145,29 @@ public class ErrorHandlingService {
     }
 
     private CompletableFuture<Void> handleDbBatchFailures(List<FailureRecord> failures) {
-        if (!properties.db().enabled()) {
+        if (!isDbEnabled()) {
             logger.warn("DB strategy configured but DB is disabled");
             return CompletableFuture.completedFuture(null);
         }
 
+        List<FailureRecord> snapshot = List.copyOf(failures);
+
         return CompletableFuture.supplyAsync(() -> {
             try {
-                if (dbCircuitBreaker.getState() == CircuitBreaker.State.OPEN) {
-                    logger.error("DB circuit breaker is OPEN, cannot store {} failure records", failures.size());
+                if (isDbCircuitBreakerOpen()) {
+                    logger.error("DB circuit breaker is OPEN, cannot store {} failure records", snapshot.size());
                     return null;
                 }
 
-                return dbCircuitBreaker.executeSupplier(() -> {
-                    List<FailureRecord> savedRecords = failureRepository.saveAll(failures);
+                return executeWithCircuitBreaker(() -> {
+                    List<FailureRecord> savedRecords = failureRepository.saveAll(snapshot);
                     logger.debug("Bulk saved {} failure records to DB", savedRecords.size());
                     return null;
                 });
             } catch (Exception e) {
-                logger.error("Failed to bulk save {} failure records to DB: {}", failures.size(), e.getMessage());
-                throw new RuntimeException(e);
+                throw new CompletionException(e);
             }
-        });
+        }, asyncExecutor);
     }
 
     private CompletableFuture<Void> handleKafkaBatchFailures(List<FailureRecord> failures) {
@@ -184,12 +189,10 @@ public class ErrorHandlingService {
                 : properties.dlt().nonRetryableTopic();
 
             CompletableFuture<Void> future = kafkaTemplate.get().send(topic, failure.getMessageKey(), failure.getMessageValue())
-                .thenAccept(result -> {
-                    logger.debug("Sent failure record to DLT topic '{}': offset {}",
-                        topic, result.getRecordMetadata().offset());
-                })
+                .thenAccept(result -> logger.debug("Sent failure record to DLT topic '{}': offset {}",
+                    topic, result.getRecordMetadata().offset()))
                 .exceptionally(throwable -> {
-                    logger.error("Failed to send failure record to DLT topic '{}': {}", topic, throwable.getMessage());
+                    logger.error("Failed to send failure record to DLT topic '{}': {}", topic, throwable.getMessage(), throwable);
                     return null;
                 });
 
@@ -200,7 +203,7 @@ public class ErrorHandlingService {
     }
 
     private CompletableFuture<Void> handleHybridBatchFailures(List<FailureRecord> failures) {
-        if (properties.db().enabled() && dbCircuitBreaker.getState() != CircuitBreaker.State.OPEN) {
+        if (isDbEnabled() && !isDbCircuitBreakerOpen()) {
             return handleDbBatchFailures(failures);
         } else if (isDltEnabled()) {
             logger.warn("DB unavailable, falling back to Kafka DLT for {} failures", failures.size());
@@ -215,24 +218,47 @@ public class ErrorHandlingService {
         return properties.dlt() != null && properties.dlt().enabled();
     }
 
+    private boolean isDbEnabled() {
+        return properties.db() != null && properties.db().enabled();
+    }
+
+    private Optional<CircuitBreaker> resolveCircuitBreaker(CircuitBreakerRegistry registry) {
+        if (properties.db() != null && properties.db().enabled() && properties.db().circuitBreaker()) {
+            return Optional.of(registry.circuitBreaker("dbCircuit"));
+        }
+        return Optional.empty();
+    }
+
+    private <T> T executeWithCircuitBreaker(Supplier<T> supplier) {
+        return dbCircuitBreaker.map(circuitBreaker -> circuitBreaker.executeSupplier(supplier)).orElseGet(() -> supplier.get());
+    }
+
     public boolean isDbCircuitBreakerOpen() {
-        return dbCircuitBreaker.getState() == CircuitBreaker.State.OPEN;
+        return dbCircuitBreaker.map(circuitBreaker -> circuitBreaker.getState() == CircuitBreaker.State.OPEN).orElse(false);
     }
 
     public long getRetryableFailureCount() {
+        if (!isDbEnabled()) {
+            return 0;
+        }
+
         try {
             return failureRepository.countByFailureType(FailureRecord.FailureType.RETRYABLE);
         } catch (Exception e) {
-            logger.error("Failed to count retryable failures: {}", e.getMessage());
+            logger.error("Failed to count retryable failures: {}", e.getMessage(), e);
             return 0;
         }
     }
 
     public long getNonRetryableFailureCount() {
+        if (!isDbEnabled()) {
+            return 0;
+        }
+
         try {
             return failureRepository.countByFailureType(FailureRecord.FailureType.NON_RETRYABLE);
         } catch (Exception e) {
-            logger.error("Failed to count non-retryable failures: {}", e.getMessage());
+            logger.error("Failed to count non-retryable failures: {}", e.getMessage(), e);
             return 0;
         }
     }

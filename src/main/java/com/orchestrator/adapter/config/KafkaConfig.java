@@ -16,13 +16,15 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Configuration
-@EnableConfigurationProperties(AdapterProperties.class)
+@EnableConfigurationProperties({AdapterProperties.class, TargetKafkaProperties.class})
 public class KafkaConfig {
 
     private final AdapterProperties properties;
+    private final TargetKafkaProperties targetProperties;
 
-    public KafkaConfig(AdapterProperties properties) {
+    public KafkaConfig(AdapterProperties properties, TargetKafkaProperties targetProperties) {
         this.properties = properties;
+        this.targetProperties = targetProperties;
     }
 
     @Bean
@@ -141,15 +143,14 @@ public class KafkaConfig {
     public ConcurrentKafkaListenerContainerFactory<String, String> recordKafkaListenerContainerFactory() {
         ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(recordConsumerFactory()); // Use dedicated record consumer factory
-        factory.setConcurrency(Math.max(properties.consumer().concurrency(), 3)); // Higher concurrency for record mode
-        factory.setBatchListener(false); // Single record processing
+        factory.setConcurrency(Math.max(properties.consumer().concurrency(), 1));
+        factory.setBatchListener(false);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
-        factory.getContainerProperties().setPollTimeout(500); // Shorter poll timeout for record mode
+        factory.getContainerProperties().setPollTimeout(properties.consumer().pollTimeoutMs());
         factory.getContainerProperties().setMicrometerEnabled(true);
 
-        // Record-specific configuration - Optimized for low latency
-        factory.getContainerProperties().setSyncCommits(false); // Async commits for speed
-        factory.getContainerProperties().setCommitRetries(1); // Fewer retries
+        factory.getContainerProperties().setSyncCommits(false);
+        factory.getContainerProperties().setCommitRetries(1);
 
         return factory;
     }
@@ -207,7 +208,7 @@ public class KafkaConfig {
         Map<String, Object> configProps = new HashMap<>();
 
         // Basic Configuration
-        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, getTargetBootstrapServers());
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, targetProperties.bootstrapServers());
         configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 
@@ -245,7 +246,7 @@ public class KafkaConfig {
     @Bean("targetKafkaTemplate")
     public KafkaTemplate<String, String> targetKafkaTemplate() {
         KafkaTemplate<String, String> template = new KafkaTemplate<>(targetProducerFactory());
-        template.setDefaultTopic(getTargetTopic());
+        template.setDefaultTopic(targetProperties.topic());
         return template;
     }
 
@@ -253,15 +254,5 @@ public class KafkaConfig {
         return properties.dlt() != null && properties.dlt().bootstrapServers() != null
             ? properties.dlt().bootstrapServers()
             : properties.consumer().bootstrapServers();
-    }
-
-    private String getTargetBootstrapServers() {
-        String targetServers = System.getProperty("target.kafka.bootstrap-servers");
-        return targetServers != null ? targetServers : properties.consumer().bootstrapServers();
-    }
-
-    private String getTargetTopic() {
-        String targetTopic = System.getProperty("target.kafka.topic");
-        return targetTopic != null ? targetTopic : "output-topic";
     }
 }

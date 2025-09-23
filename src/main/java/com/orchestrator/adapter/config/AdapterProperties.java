@@ -3,9 +3,11 @@ package com.orchestrator.adapter.config;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 
 @ConfigurationProperties(prefix = "adapter")
@@ -41,14 +43,34 @@ public record AdapterProperties(
         String retryableTopic,
         String nonRetryableTopic,
         String bootstrapServers
-    ) {}
+    ) {
+
+        @AssertTrue(message = "Retryable and non-retryable DLT topics must be configured when DLT is enabled")
+        public boolean isTopicConfigurationValid() {
+            if (!enabled) {
+                return true;
+            }
+            return StringUtils.hasText(retryableTopic) && StringUtils.hasText(nonRetryableTopic);
+        }
+
+        @AssertTrue(message = "DLT bootstrap servers must be configured when DLT is enabled")
+        public boolean isBootstrapConfigurationValid() {
+            return !enabled || StringUtils.hasText(bootstrapServers);
+        }
+    }
 
     public record DbConfig(
         boolean enabled,
         boolean circuitBreaker,
         @Positive int bulkSize,
-        long timeoutMs
-    ) {}
+        @Positive long timeoutMs
+    ) {
+
+        @AssertTrue(message = "Circuit breaker cannot be enabled when the DB is disabled")
+        public boolean isCircuitBreakerConfigurationValid() {
+            return enabled || !circuitBreaker;
+        }
+    }
 
     public enum ConsumerMode {
         RECORD, BATCH

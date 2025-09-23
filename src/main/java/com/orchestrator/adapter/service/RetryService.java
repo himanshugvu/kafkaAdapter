@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 @Service
@@ -20,15 +21,19 @@ public class RetryService {
     }
 
     public <T> CompletableFuture<T> executeWithRetry(Supplier<CompletableFuture<T>> operation, String operationName) {
-        return executeWithRetry(operation, operationName, 0);
+        int maxAttempts = Math.max(properties.retry().maxAttempts(), 1);
+        return executeWithRetry(operation, operationName, 1, maxAttempts);
     }
 
-    private <T> CompletableFuture<T> executeWithRetry(Supplier<CompletableFuture<T>> operation, String operationName, int attempt) {
+    private <T> CompletableFuture<T> executeWithRetry(Supplier<CompletableFuture<T>> operation,
+                                                      String operationName,
+                                                      int attempt,
+                                                      int maxAttempts) {
         return operation.get()
             .handle((result, throwable) -> {
                 if (throwable == null) {
-                    if (attempt > 0) {
-                        logger.info("Operation '{}' succeeded after {} retries", operationName, attempt);
+                    if (attempt > 1) {
+                        logger.info("Operation '{}' succeeded after {} retry attempt(s)", operationName, attempt - 1);
                     }
                     return CompletableFuture.completedFuture(result);
                 }
@@ -40,15 +45,16 @@ public class RetryService {
                     return CompletableFuture.<T>failedFuture(cause);
                 }
 
-                if (attempt >= properties.retry().maxAttempts()) {
-                    logger.error("Operation '{}' failed after {} attempts: {}", operationName, attempt + 1, cause.getMessage());
+                if (attempt >= maxAttempts) {
+                    logger.error("Operation '{}' failed after {} attempt(s): {}", operationName, attempt, cause.getMessage());
                     return CompletableFuture.<T>failedFuture(cause);
                 }
 
-                logger.warn("Retryable exception in operation '{}' (attempt {}): {}", operationName, attempt + 1, cause.getMessage());
-                return executeWithRetry(operation, operationName, attempt + 1);
+                logger.warn("Retryable exception in operation '{}' (attempt {}/{}): {}",
+                    operationName, attempt, maxAttempts, cause.getMessage());
+                return executeWithRetry(operation, operationName, attempt + 1, maxAttempts);
             })
-            .thenCompose(future -> future);
+            .thenCompose(Function.identity());
     }
 
     public boolean isRetriableException(Throwable throwable) {
